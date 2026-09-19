@@ -7,7 +7,7 @@ enum Prefs {
 
     /// Where the connection form points by default (PREFILL only — no token is
     /// baked in, so the app always starts at the setup/backends flow).
-    static let defaultBase = "https://standalone-agent.temp.10.199.64.20.nip.io"
+    static let defaultBase = "https://agent.temp.10.199.64.20.nip.io"
 
     static func loadBase() -> String {
         d.string(forKey: "agent.baseUrl") ?? ProcessInfo.processInfo.environment["AGENT_BASE_URL"] ?? defaultBase
