@@ -352,6 +352,22 @@ final class MessagesController {
         case "tool-output-denied":
             guard let tcId = (params["toolCallId"] ?? params["id"]) as? String else { return }
             updateToolResult(tcId, nil, errorMsg: "denied")
+        case "file", "reasoning-file":
+            // A streamed media part the agent has already offloaded to the blob
+            // store; `code` is the file code. Render it as a file part (same
+            // path as a persisted file part) on the streaming bubble.
+            guard let code = params["code"] as? String, !code.isEmpty else { return }
+            let sid = ensureStreamingMsg(forceNew: false)
+            let partId = "f\(code)"
+            if messages.first(where: { $0.id == sid })?.parts.contains(where: { $0.id == partId }) == true { return }
+            setMsg(sid) { m in
+                m.parts.append(ChatPart(
+                    id: partId, type: "file", code: code,
+                    name: params["name"] as? String,
+                    mime: (params["mediaType"] ?? params["mime"]) as? String,
+                    size: nil
+                ))
+            }
         case "turn-complete":
             finishStreaming()
         case "chain-changed":

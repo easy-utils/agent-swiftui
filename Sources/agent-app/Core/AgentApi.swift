@@ -97,10 +97,12 @@ final class AgentApi: @unchecked Sendable {
 
     // ---- files ----
 
-    func uploadFile(name: String, mime: String, bytes: Data) async throws -> UploadedFile {
+    func uploadFile(name: String, bytes: Data) async throws -> UploadedFile {
         var req = Agent_V1_IngestFileRequest()
-        req.data = bytes; req.name = name; req.mime = mime
-        return UploadedFile(code: try await agent.ingestFile(req: req).code, name: name, mime: mime, size: bytes.count)
+        req.data = bytes; req.name = name
+        // The agent DERIVES the content type from the bytes; adopt its answer.
+        let r = try await agent.ingestFile(req: req)
+        return UploadedFile(code: r.code, name: name, mime: r.mime, size: bytes.count)
     }
 
     func fetchFileBytes(_ code: String) async throws -> Data {
@@ -108,10 +110,18 @@ final class AgentApi: @unchecked Sendable {
         return try await agent.getFile(req: req).data
     }
 
-    func fileHead(_ code: String) async throws -> (String?, Int) {
+    func fileHead(_ code: String) async throws -> FileMeta {
         var req = Agent_V1_GetFileMetaRequest(); req.code = code
         let r = try await agent.getFileMeta(req: req)
-        return (r.mime.isEmpty ? nil : r.mime, Int(r.size))
+        return FileMeta(
+            contentType: r.mime.isEmpty ? nil : r.mime,
+            length: Int(r.size),
+            width: r.hasWidth ? Int(r.width) : nil,
+            height: r.hasHeight ? Int(r.height) : nil,
+            durationMs: r.hasDurationMs ? Int(r.durationMs) : nil,
+            thumbCode: r.hasThumbCode && !r.thumbCode.isEmpty ? r.thumbCode : nil,
+            thumbhash: r.hasThumbhash && !r.thumbhash.isEmpty ? r.thumbhash : nil,
+        )
     }
 
     // ---- messages ----

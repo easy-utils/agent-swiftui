@@ -639,7 +639,7 @@ struct ChatScreen: View {
             attachments.append(tmp)
             Task {
                 do {
-                    let done = try await store.api.uploadFile(name: f.name, mime: f.mime, bytes: f.bytes)
+                    let done = try await store.api.uploadFile(name: f.name, bytes: f.bytes)
                     if let i = attachments.firstIndex(where: { $0.code == tmp.code }) {
                         attachments[i] = done
                     }
@@ -1112,8 +1112,8 @@ struct ToolCard: View {
 
     private var tool: String { part.tool.isEmpty ? (part.state?.title ?? "") : part.tool }
 
-    /// Fixed media fields in a tool result's `data`: images/videos/audio
-    /// (each `{code, mime, name}`) render as media cards.
+    /// Produced-file refs in a tool result's `data.files` (each
+    /// `{code, mime, name, bytes}`) render as media/file cards.
     private var mediaRefs: [(code: String, mime: String?, name: String?)] {
         guard let data = part.state?.data else { return [] }
         var out: [(String, String?, String?)] = []
@@ -1122,9 +1122,7 @@ struct ToolCard: View {
                 out.append((code, m["mime"] as? String, m["name"] as? String))
             }
         }
-        for key in ["images", "videos", "audio"] {
-            if let list = data[key] as? [Any?] { list.forEach(collect) } else if let one = data[key] { collect(one) }
-        }
+        if let list = data["files"] as? [Any?] { list.forEach(collect) } else if let one = data["files"] { collect(one) }
         return out
     }
 

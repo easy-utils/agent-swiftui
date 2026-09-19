@@ -129,6 +129,18 @@ struct UploadedFile: Equatable {
     var hasError: Bool { uploadState == .error }
 }
 
+/// File metadata from GetFileMeta. The optional media facts are populated
+/// (server-side, best-effort) only for supported image/video/audio files.
+struct FileMeta {
+    var contentType: String?
+    var length: Int
+    var width: Int?
+    var height: Int?
+    var durationMs: Int?
+    var thumbCode: String?
+    var thumbhash: String?
+}
+
 struct ChatDraft {
     var text: String = ""
     var attachments: [UploadedFile] = []
