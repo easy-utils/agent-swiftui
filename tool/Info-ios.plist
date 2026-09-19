@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleName</key><string>Easy Agent</string>
+  <key>CFBundleDisplayName</key><string>Easy Agent</string>
+  <key>CFBundleIdentifier</key><string>easy.agent.swiftui</string>
+  <key>CFBundleVersion</key><string>@VERSION@</string>
+  <key>CFBundleShortVersionString</key><string>@VERSION@</string>
+  <key>CFBundleExecutable</key><string>agent-app</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleIconFiles</key>
+  <array>
+    <string>AppIcon60x60</string>
+    <string>AppIcon76x76</string>
+  </array>
+  <key>CFBundleIcons</key>
+  <dict>
+    <key>CFBundlePrimaryIcon</key>
+    <dict>
+      <key>CFBundleIconFiles</key>
+      <array>
+        <string>AppIcon60x60</string>
+        <string>AppIcon76x76</string>
+      </array>
+    </dict>
+  </dict>
+  <key>CFBundleSupportedPlatforms</key>
+  <array><string>iPhoneOS</string></array>
+  <key>MinimumOSVersion</key><string>17.0</string>
+  <key>LSRequiresIPhoneOS</key><true/>
+  <key>UILaunchScreen</key><dict/>
+  <key>UISupportedInterfaceOrientations</key>
+  <array>
+    <string>UIInterfaceOrientationPortrait</string>
+    <string>UIInterfaceOrientationLandscapeLeft</string>
+    <string>UIInterfaceOrientationLandscapeRight</string>
+  </array>
+  <key>NSMicrophoneUsageDescription</key><string>Easy Agent needs microphone access for voice messages.</string>
+  <key>NSCameraUsageDescription</key><string>Easy Agent needs camera access to attach photos.</string>
+  <key>NSPhotoLibraryUsageDescription</key><string>Easy Agent needs photo library access to attach images.</string>
+</dict>
+</plist>
