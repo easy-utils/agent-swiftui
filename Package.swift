@@ -2,7 +2,7 @@
 import PackageDescription
 
 let package = Package(
-    name: "agent-swiftui-app",
+    name: "agent-swiftui",
     platforms: [
         .iOS(.v17),
         .macOS(.v14),

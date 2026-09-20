@@ -1,4 +1,4 @@
-# agent-swiftui-app
+# agent-swiftui
 
 SwiftUI port of the Flutter agent app (`easy-utils/agent-flutter`) over
 `agent-sdk-swift` (agent.v1.AgentService via easy-rpc). Full page/feature
@@ -16,7 +16,7 @@ protobuf sources use `nonisolated` declarations that the older Command Line
 Tools-only Swift 6.0 compiler rejects.
 
 ```bash
-cd easy-utils/agent-swiftui-app
+cd easy-utils/agent-swiftui
 swift build -c release                      # macOS, host arch
 swift build -c release --arch arm64 --arch x86_64   # universal2
 # iOS: open in Xcode, select the agent-app target, run on device/simulator.
