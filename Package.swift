@@ -10,7 +10,7 @@ let package = Package(
     dependencies: [
         // The typed agent client (pbandk-equivalent SwiftProtobuf messages +
         // the generated easy-rpc AgentServiceClient). Remote tag — no local paths.
-        .package(url: "https://github.com/easy-utils/agent-sdk-swift.git", from: "0.16.2"),
+        .package(url: "https://github.com/easy-utils/agent-sdk-swift.git", from: "0.17.0"),
         // The easy-rpc Swift core: URLSessionTransport + the composition root
         // (connect) and the proto3 JSON codec. The app imports it directly for
         // the transport it hands to the generated client.

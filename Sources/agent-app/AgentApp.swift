@@ -73,8 +73,14 @@ struct AgentApp: App {
                     do {
                         let api = AgentApi(baseUrl: base, token: token)
                         _ = try await api.listSessions() // verify
+                        let username = await api.resolveUsername()
                         Prefs.save(base, token)
-                        Prefs.upsertBackend(BackendCfg(name: backendNameFor(base), baseUrl: base, token: token))
+                        Prefs.upsertBackend(BackendCfg(
+                            name: username.isEmpty ? backendNameFor(base) : username,
+                            baseUrl: base,
+                            token: token,
+                            username: username,
+                        ))
                         await enterApp(api: api)
                         done(nil)
                     } catch {
@@ -90,6 +96,14 @@ struct AgentApp: App {
                     phase = .loading
                     Task {
                         let api = AgentApi(baseUrl: b.baseUrl, token: b.token)
+                        // Refresh the cached username (older entries may predate
+                        // GetIdentity, or the tenant name may have changed).
+                        let name = await api.resolveUsername()
+                        if !name.isEmpty {
+                            Prefs.upsertBackend(BackendCfg(
+                                name: name, baseUrl: b.baseUrl, token: b.token, username: name,
+                            ))
+                        }
                         await enterApp(api: api)
                     }
                 },

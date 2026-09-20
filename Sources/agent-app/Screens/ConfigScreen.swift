@@ -83,6 +83,10 @@ struct ConfigScreen: View {
     private func setLangPref(_ v: String) {
         Prefs.uiLang = v
         I18n.shared.set(resolveLangPref(v))
+        // A session whose locale is 'follow' inherits the tenant config locale,
+        // so keep that in sync with the effective agent locale whenever the UI
+        // language changes (otherwise the agent keeps answering in the stale one).
+        Task { try? await store.api.setConfigKey("locale", Prefs.effectiveAgentLocale) }
     }
 
     private func setAgentLocale(_ v: String) {
@@ -184,7 +188,9 @@ struct ConfigScreen: View {
                     AppIcon(b.baseUrl == store.api.baseUrl ? AppIcons.target : AppIcons.server)
                         .foregroundStyle(b.baseUrl == store.api.baseUrl ? p.primary : p.mutedForeground)
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(b.name.isEmpty ? b.baseUrl : b.name).foregroundStyle(p.foreground)
+                        // Prefer the resolved username (GetIdentity).
+                        Text(b.username.isEmpty ? (b.name.isEmpty ? b.baseUrl : b.name) : b.username)
+                            .foregroundStyle(p.foreground)
                         Text(b.baseUrl).appFont(.tiny).foregroundStyle(p.mutedForeground).lineLimit(1)
                     }
                     Spacer()

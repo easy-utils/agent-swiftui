@@ -53,6 +53,17 @@ final class AgentApi: @unchecked Sendable {
         try await agent.listSessions(req: Agent_V1_ListSessionsRequest()).sessions.map(sessionFromPb)
     }
 
+    /// The caller's resolved identity (tenant id/name + role), from the token.
+    func identity() async throws -> Identity {
+        let r = try await agent.getIdentity(req: Agent_V1_GetIdentityRequest())
+        return Identity(tenant: r.tenant, tenantName: r.tenantName, role: r.role)
+    }
+
+    /// Best-effort username for the saved-backend list ("" on failure).
+    func resolveUsername() async -> String {
+        (try? await identity().displayName) ?? ""
+    }
+
     func createSession(_ params: [String: Any?]) async throws -> Session {
         var req = Agent_V1_CreateSessionRequest()
         req.name = params["name"] as? String ?? ""
@@ -143,13 +154,15 @@ final class AgentApi: @unchecked Sendable {
     // ---- session ops ----
 
     func settings(_ id: String, _ updates: [String: Any?]) async throws -> Session? {
+        // Only model / preset / locale / variant are client-editable (proto
+        // v0.18 dropped max_turns/system_prompt/group from UpdateSettingsRequest;
+        // those are governed by the preset). Empty model/preset mean "leave
+        // unchanged"; locale/variant use "" to clear an override.
         var req = Agent_V1_UpdateSettingsRequest(); req.id = id
         if let v = updates["model"] as? String, !v.isEmpty { req.model = v }
         if let v = updates["preset"] as? String, !v.isEmpty { req.preset = v }
-        req.systemPrompt = updates["system_prompt"] as? String ?? ""
         req.locale = updates["locale"] as? String ?? ""
         req.variant = updates["variant"] as? String ?? ""
-        if let v = updates["max_turns"] as? Int, v > 0 { req.maxTurns = Int32(v) }
         let r = try await agent.updateSettings(req: req)
         return r.hasSession ? sessionFromPb(r.session) : nil
     }

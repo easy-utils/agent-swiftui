@@ -246,11 +246,24 @@ struct BackendCfg: Identifiable, Equatable {
     var name: String
     var baseUrl: String
     var token: String
+    /// Human username (tenant name) resolved from the token via
+    /// AgentService.GetIdentity at connect/switch time. Empty for legacy.
+    var username: String = ""
     var id: String { baseUrl }
 }
 
 func backendNameFor(_ baseUrl: String) -> String {
     URL(string: baseUrl)?.host ?? baseUrl
+}
+
+/// The caller's resolved identity (from its bearer token).
+struct Identity {
+    var tenant: String = ""
+    var tenantName: String = ""
+    var role: String = ""
+    /// Display name: the human tenant name, falling back to the id.
+    var displayName: String { tenantName.isEmpty ? tenant : tenantName }
+    var isAdmin: Bool { role == "admin" }
 }
 
 // ---- stream events ----

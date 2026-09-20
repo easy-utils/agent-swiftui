@@ -89,22 +89,32 @@ enum Prefs {
     }
 
     static func backends() -> [BackendCfg] {
-        ((d.string(forKey: "agent.backends") ?? "").isEmpty ? [] :
-            (d.string(forKey: "agent.backends") ?? "").split(separator: "\n").compactMap { line -> BackendCfg? in
-                let p = line.split(separator: "\u{1}", maxSplits: 2)
-                return p.count == 3 ? BackendCfg(name: String(p[0]), baseUrl: String(p[1]), token: String(p[2])) : nil
-            })
+        let raw = d.string(forKey: "agent.backends") ?? ""
+        if raw.isEmpty { return [] }
+        return raw.split(separator: "\n").compactMap { line -> BackendCfg? in
+            // 3 fields = legacy (no username); 4 = name/baseUrl/token/username.
+            let p = line.split(separator: "\u{1}", maxSplits: 3)
+            switch p.count {
+            case 3: return BackendCfg(name: String(p[0]), baseUrl: String(p[1]), token: String(p[2]))
+            case 4: return BackendCfg(name: String(p[0]), baseUrl: String(p[1]), token: String(p[2]), username: String(p[3]))
+            default: return nil
+            }
+        }
+    }
+
+    private static func encode(_ list: [BackendCfg]) -> String {
+        list.map { "\($0.name)\u{1}\($0.baseUrl)\u{1}\($0.token)\u{1}\($0.username)" }.joined(separator: "\n")
     }
 
     /// A saved user is identified by the FULL connection (baseUrl + token):
     /// one host may serve several tenants.
     static func upsertBackend(_ b: BackendCfg) {
         let list = backends().filter { !($0.baseUrl == b.baseUrl && $0.token == b.token) } + [b]
-        d.set(list.map { "\($0.name)\u{1}\($0.baseUrl)\u{1}\($0.token)" }.joined(separator: "\n"), forKey: "agent.backends")
+        d.set(encode(list), forKey: "agent.backends")
     }
 
     static func removeBackend(_ b: BackendCfg) {
         let list = backends().filter { !($0.baseUrl == b.baseUrl && $0.token == b.token) }
-        d.set(list.map { "\($0.name)\u{1}\($0.baseUrl)\u{1}\($0.token)" }.joined(separator: "\n"), forKey: "agent.backends")
+        d.set(encode(list), forKey: "agent.backends")
     }
 }

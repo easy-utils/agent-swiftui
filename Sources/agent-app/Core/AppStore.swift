@@ -78,6 +78,15 @@ final class AppStore {
         scope.attach { [weak self] in self?.onStoreTick() }
         Task { await hydrateLocal() }
         startSessionWatch()
+        syncAgentLocale()
+    }
+
+    /// Keep the tenant config locale aligned with the effective agent locale
+    /// (the UI language when the pref is 'follow'), so a session that follows
+    /// it resolves correctly instead of inheriting a stale server default.
+    /// Mirrors the webui's boot-time syncAgentLocale. Best-effort.
+    private func syncAgentLocale() {
+        Task { try? await api.setConfigKey("locale", Prefs.effectiveAgentLocale) }
     }
 
     private func onStoreTick() { /* reserved for cross-cutting refresh hooks */ }
