@@ -40,13 +40,14 @@ final class VoiceRecorder {
 
     func stop() async -> PickedFile? {
         guard let r = recorder, let u = url else { return nil }
-        let seconds = r.currentTime
         r.stop()
         recorder = nil
         url = nil
-        // Ignore clips too short to be meaningful (flutter voiceTooShort).
-        guard seconds >= 0.3, let data = try? Data(contentsOf: u) else { return nil }
+        // Ignore clips too short to be meaningful (flutter voiceTooShort):
+        // under ~0.4s of 16kHz mono 16-bit ≈ 12.8KB — an accidental tap.
+        guard let data = try? Data(contentsOf: u) else { return nil }
         try? FileManager.default.removeItem(at: u)
+        guard data.count >= 12800 else { return nil }
         return PickedFile(name: "voice-\(Int(Date().timeIntervalSince1970)).wav",
                           mime: "audio/wav", bytes: data, localPath: u.path)
     }
