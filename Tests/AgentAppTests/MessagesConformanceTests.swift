@@ -15,45 +15,76 @@ import Foundation
 final class MessagesConformanceTests: XCTestCase {
 
     /// A faithful in-memory fake: the persisted chain + a push stream.
-    private final class FakeServer {
-        var chain: [Message] = []
-        var promptErr: String?
-        var status = "idle"
+    ///
+    /// All mutable state is under a lock: `push` comes from the test and
+    /// `next` from the stream consumer, and without serialization the queue /
+    /// waiter bookkeeping races — silently REORDERING or dropping events (the
+    /// flake that made happy_path fail ~1 run in 5 on macOS). A lock (not
+    /// @MainActor) because `FakeTransport` must satisfy the nonisolated
+    /// `MessageTransport` requirements.
+    private final class FakeServer: @unchecked Sendable {
+        private let lock = NSLock()
+        private var _chain: [Message] = []
+        private var _promptErr: String?
+        private var _status = "idle"
+        private var _pushed = 0
         /// Continuations waiting for the next pushed event.
         private var waiters: [CheckedContinuation<StreamEvent?, Never>] = []
         private var queue: [StreamEvent] = []
         private var closed = false
-        /// Events handed to the consumer vs pushed. `settle` waits for
-        /// delivered == pushed so a slow async-stream consumer cannot be
-        /// asserted against mid-flight (a real flake on macOS).
-        private(set) var pushed = 0
-        private(set) var delivered = 0
 
-        func failPrompt(_ msg: String) { promptErr = msg }
-        func clearPromptError() { promptErr = nil }
-        func persist(_ msgs: Message...) { chain.append(contentsOf: msgs) }
+        var chain: [Message] { lock.lock(); defer { lock.unlock() }; return _chain }
+        var status: String { lock.lock(); defer { lock.unlock() }; return _status }
+        var promptErr: String? { lock.lock(); defer { lock.unlock() }; return _promptErr }
+        /// Events pushed (for `settle` to compare against `eventsApplied`).
+        var pushed: Int { lock.lock(); defer { lock.unlock() }; return _pushed }
+
+        func failPrompt(_ msg: String) { lock.lock(); _promptErr = msg; lock.unlock() }
+        func clearPromptError() { lock.lock(); _promptErr = nil; lock.unlock() }
+        func setStatus(_ s: String) { lock.lock(); _status = s; lock.unlock() }
+        func persist(_ msgs: Message...) { lock.lock(); _chain.append(contentsOf: msgs); lock.unlock() }
 
         func push(_ ev: StreamEvent) {
-            pushed += 1
+            lock.lock()
+            _pushed += 1
             if let w = waiters.first {
                 waiters.removeFirst()
+                lock.unlock()
                 w.resume(returning: ev)
             } else {
                 queue.append(ev)
+                lock.unlock()
             }
         }
 
         func next() async -> StreamEvent? {
-            let ev: StreamEvent?
+            lock.lock()
             if !queue.isEmpty {
-                ev = queue.removeFirst()
-            } else if closed {
-                return nil
-            } else {
-                ev = await withCheckedContinuation { c in waiters.append(c) }
+                let ev = queue.removeFirst()
+                lock.unlock()
+                return ev
             }
-            delivered += 1
-            return ev
+            if closed {
+                lock.unlock()
+                return nil
+            }
+            lock.unlock()
+            return await withCheckedContinuation { c in
+                lock.lock()
+                // Re-check under the lock: a push may have landed between the
+                // unlock above and this registration.
+                if !queue.isEmpty {
+                    let ev = queue.removeFirst()
+                    lock.unlock()
+                    c.resume(returning: ev)
+                } else if closed {
+                    lock.unlock()
+                    c.resume(returning: nil)
+                } else {
+                    waiters.append(c)
+                    lock.unlock()
+                }
+            }
         }
     }
 
@@ -143,6 +174,10 @@ final class MessagesConformanceTests: XCTestCase {
         let server = FakeServer()
         let ctrl = MessagesController(api: FakeTransport(server), getSessionId: { "s1" }, local: nil)
         ctrl.init_()
+        // Boot (baseline fetch + recover) must FINISH before events are pushed:
+        // the stream only connects at the end of boot, and a baseline landing
+        // mid-stream would clobber an in-flight bubble.
+        await ctrl.bootTask?.value
         await settle(ctrl, server)
 
         switch id {

@@ -53,10 +53,16 @@ final class MessagesController {
         }
     }
 
+    /// The boot task (hydrate -> sync -> recover -> connect). Exposed so a
+    /// test can await the initial baseline before driving the stream; the
+    /// stream only connects at the END of boot, so events delivered before
+    /// then would race the baseline fetch.
+    private(set) var bootTask: Task<Void, Never>?
+
     func init_() {
         let sid = getSessionId()
         guard !sid.isEmpty else { return }
-        Task { await boot(sid) }
+        bootTask = Task { await boot(sid) }
     }
 
     private func boot(_ sid: String) async {
@@ -461,20 +467,26 @@ final class MessagesController {
         messages.filter { $0.isLocal && ($0.status == "streaming" || $0.status == "pending") }
     }
 
-    /// ISO-8601 with MILLISECOND precision. Second-granularity (the
-    /// ISO8601DateFormatter default) makes a user bubble and the assistant
-    /// placeholder created in the same second TIE, so `renumber`'s stable
-    /// tie-break would then preserve whatever array order a concurrent
-    /// baseline/merge happened to leave — drawing the reply above its prompt.
-    /// Flutter's `toIso8601String()` carries microseconds; match that.
+    /// ISO-8601 with fractional seconds, and STRICTLY MONOTONIC. Two locally
+    /// created rows (a server-authored user bubble and the assistant
+    /// placeholder announced right after it) routinely land in the same
+    /// millisecond; `renumber`'s tie-break then preserves whatever array order
+    /// a concurrent baseline/merge left — which can draw the reply ABOVE its
+    /// prompt. Forcing each stamp past the previous one removes the tie
+    /// entirely. (Flutter gets this for free: `toIso8601String()` carries
+    /// microseconds.)
     private static let isoMillis: ISO8601DateFormatter = {
         let f = ISO8601DateFormatter()
         f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         return f
     }()
+    private var lastStamp: Date = .distantPast
 
     private func nowIso() -> String {
-        Self.isoMillis.string(from: Date())
+        var d = Date()
+        if d <= lastStamp { d = lastStamp.addingTimeInterval(0.001) }
+        lastStamp = d
+        return Self.isoMillis.string(from: d)
     }
 
     /// The server-authored `message_id` stamped on a part, else the current
