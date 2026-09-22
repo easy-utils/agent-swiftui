@@ -90,6 +90,8 @@ struct Message {
     var parts: [MessagePart]
     var createdAt: String?
     var prevId: String = ""
+    /// ORIGIN of the message ('' for agent-authored).
+    var source: String = ""
 }
 
 struct ChatPart: Identifiable, Equatable {
@@ -113,6 +115,8 @@ struct ChatMessage: Identifiable {
     var seq: Int?
     var prevId: String = ""
     var isLocal: Bool = false
+    /// ORIGIN of the message ('' for agent-authored).
+    var source: String = ""
 }
 
 enum UploadState: String { case idle, uploading, done, error }
@@ -155,6 +159,14 @@ struct MailboxEntry: Identifiable {
     var status: String
     var createdAt: String
     var consumedAt: String?
+    /// ORIGIN: user / session:{name} / system:{name} / extension-defined.
+    var source: String = ""
+}
+
+/// One page of the mailbox (newest-first) plus whether older entries exist.
+struct MailboxPage {
+    var entries: [MailboxEntry]
+    var hasMore: Bool
 }
 
 struct Preset: Identifiable {

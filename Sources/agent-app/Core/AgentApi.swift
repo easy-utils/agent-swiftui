@@ -194,17 +194,24 @@ final class AgentApi: @unchecked Sendable {
         return ((st["status"] as? String) ?? "idle", (st["parts"] as? [Any?]) ?? [])
     }
 
-    func mailbox(_ id: String) async throws -> [MailboxEntry] {
-        var req = Agent_V1_MailboxRequest(); req.id = id
+    /// One page of the mailbox (NEWEST-FIRST, paged backward). Pass the oldest
+    /// entry id you already hold as `before` to fetch the next older page.
+    func mailbox(_ id: String, before: String = "", limit: Int = 0) async throws -> MailboxPage {
+        var req = Agent_V1_MailboxRequest()
+        req.id = id; req.before = before; req.limit = Int32(limit)
         let r = try await agent.mailbox(req: req)
-        return r.mailbox.map { m in
-            MailboxEntry(
-                id: m.id, msgType: m.msgType, payload: m.payload,
-                effectiveAt: m.effectiveAt.isEmpty ? nil : m.effectiveAt,
-                status: m.status, createdAt: m.createdAt,
-                consumedAt: m.consumedAt.isEmpty ? nil : m.consumedAt,
-            )
-        }
+        return MailboxPage(
+            entries: r.mailbox.map { m in
+                MailboxEntry(
+                    id: m.id, msgType: m.msgType, payload: m.payload,
+                    effectiveAt: m.effectiveAt.isEmpty ? nil : m.effectiveAt,
+                    status: m.status, createdAt: m.createdAt,
+                    consumedAt: m.consumedAt.isEmpty ? nil : m.consumedAt,
+                    source: m.source,
+                )
+            },
+            hasMore: r.hasMore_p,
+        )
     }
 
     // ---- streams ----
@@ -489,7 +496,8 @@ func messageFromPb(_ m: Agent_V1_Message) -> Message {
         }
     }
     return Message(id: m.id, role: m.role, parts: parts,
-                   createdAt: m.createdAt.isEmpty ? nil : m.createdAt, prevId: m.prevID)
+                   createdAt: m.createdAt.isEmpty ? nil : m.createdAt, prevId: m.prevID,
+                   source: m.source)
 }
 
 func mapMessagesToChat(_ msgs: [Message]) -> [ChatMessage] {
@@ -500,7 +508,7 @@ func mapMessagesToChat(_ msgs: [Message]) -> [ChatMessage] {
                 ChatPart(id: $0.id, type: $0.type, text: $0.text ?? "", tool: $0.tool ?? "",
                          state: $0.state, code: $0.code, name: $0.name, mime: $0.mime, size: $0.size)
             },
-            createdAt: m.createdAt ?? "", seq: i, prevId: m.prevId
+            createdAt: m.createdAt ?? "", seq: i, prevId: m.prevId, source: m.source
         )
     }
 }

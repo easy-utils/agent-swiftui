@@ -296,6 +296,29 @@ final class MessagesController {
         let params = ev.params
         let event = ev.event
         switch event {
+        case "message-added":
+            // The server AUTHORED this message's id and chain anchor. This is
+            // the ONLY place user bubbles are created (no client-optimistic
+            // row). `streaming:true` opens the assistant step's bubble.
+            let addedId = params["message_id"] as? String ?? ""
+            let prevId = params["prev_id"] as? String ?? ""
+            let role = params["role"] as? String ?? "assistant"
+            let streaming = params["streaming"] as? Bool ?? false
+            let src = params["source"] as? String ?? ""
+            if !addedId.isEmpty {
+                if streaming && role == "assistant" {
+                    if let prevStream = streamingId, prevStream != addedId {
+                        for i in messages.indices where messages[i].id == prevStream && messages[i].status == "streaming" {
+                            messages[i].status = "complete"
+                        }
+                    }
+                    streamingId = addedId
+                    ensureStreamingMsgAt(addedId, prevId)
+                } else if role == "user" {
+                    upsertServerMessage(addedId, prevId, role: "user", source: src)
+                }
+                revision += 1
+            }
         case "start-step", "text-start", "reasoning-start", "tool-input-start":
             let current = streamingId.flatMap { id in messages.first { $0.id == id } }
             let hasToolPart = current?.parts.contains { $0.type == "tool" } ?? false
@@ -429,6 +452,34 @@ final class MessagesController {
         )
         nextSeq += 1
         return id
+    }
+
+    /// Open (or reuse) the server-authored streaming assistant bubble for the
+    /// id announced by `message-added{streaming:true}`. No id is minted here.
+    private func ensureStreamingMsgAt(_ id: String, _ prevId: String) {
+        if messages.contains(where: { $0.id == id }) {
+            streamingId = id
+            return
+        }
+        messages.append(
+            ChatMessage(id: id, role: "assistant", status: "streaming", parts: [],
+                        createdAt: nowIso(), seq: nextSeq, prevId: prevId, isLocal: true)
+        )
+        nextSeq += 1
+        revision += 1
+    }
+
+    /// Render a persisted row announced via `message-added` with the
+    /// server-authored id/position — the user prompt in particular.
+    private func upsertServerMessage(_ id: String, _ prevId: String, role: String, source: String) {
+        if messages.contains(where: { $0.id == id }) { return }
+        messages.append(
+            ChatMessage(id: id, role: role, status: "complete", parts: [],
+                        createdAt: nowIso(), seq: nextSeq, prevId: prevId,
+                        isLocal: false, source: source)
+        )
+        nextSeq += 1
+        revision += 1
     }
 
     private func setMsg(_ id: String, _ fn: (inout ChatMessage) -> Void) {
@@ -567,32 +618,13 @@ final class MessagesController {
         guard !sending else { return }
         sending = true
         let codes = attachments.map { $0.code }
-        let now = Int(Date().timeIntervalSince1970 * 1000)
-        var userParts: [ChatPart] = attachments.map {
-            ChatPart(id: "f\($0.code)", type: "file", code: $0.code, name: $0.name, mime: $0.mime, size: $0.size)
-        }
-        if !trimmed.isEmpty {
-            userParts.append(ChatPart(id: "p\(now)", type: "text", text: trimmed))
-        }
-        messages.removeAll { $0.status == "streaming" }
-        messages.append(
-            ChatMessage(id: "u\(now)", role: "user", status: "pending",
-                        parts: userParts, createdAt: nowIso(), seq: nextSeq, isLocal: true)
-        )
-        nextSeq += 1
-        _ = ensureStreamingMsg(forceNew: true)
+        // No client-optimistic user bubble: the server AUTHORS the message id
+        // and chain position and announces it via `message-added{role:user}`
+        // once the running turn drains the mailbox. We only show the composer
+        // spinner until the send RPC is accepted.
         revision += 1
         do {
-            let messageId = try await api.prompt(getSessionId(), trimmed, attachments: codes)
-            if !messageId.isEmpty {
-                for i in messages.indices
-                where messages[i].status == "pending" && messages[i].role == "user" && messages[i].isLocal {
-                    messages[i].id = messageId
-                    messages[i].status = "complete"
-                    messages[i].isLocal = false
-                }
-                revision += 1
-            }
+            _ = try await api.prompt(getSessionId(), trimmed, attachments: codes)
         } catch {
             addError(sendFailed(error))
             Task { @MainActor in AuthGate.notify(error) }

@@ -228,6 +228,15 @@ private let en: [String: String] = [
   "voicePermission": "Microphone permission denied",
   "voiceTooShort": "Recording too short",
   "workspace": "Workspace",
+  "mailboxPrompt": "Message",
+  "mailboxFromSession": "From session",
+  "mailboxFromSystem": "From system",
+  "mailboxInterrupt": "Interrupt",
+  "mailboxEvent": "Event",
+  "deliver": "Deliver to mailbox",
+  "sending": "Sending…",
+  "noMoreMessages": "No more messages",
+  "forked": "Forked",
 ]
 
 private let zh: [String: String] = [
@@ -425,4 +434,13 @@ private let zh: [String: String] = [
   "voicePermission": "未获得麦克风权限",
   "voiceTooShort": "录音太短",
   "workspace": "工作区",
+  "mailboxPrompt": "消息",
+  "mailboxFromSession": "来自会话",
+  "mailboxFromSystem": "来自系统",
+  "mailboxInterrupt": "中断",
+  "mailboxEvent": "事件",
+  "deliver": "发送到信箱",
+  "sending": "发送中…",
+  "noMoreMessages": "没有更多消息",
+  "forked": "已派生",
 ]

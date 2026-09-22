@@ -2,6 +2,9 @@ import SwiftUI
 
 // SessionListScreen — port of flutter session_list_page.dart.
 
+/// Wrapper so a raw session id can drive a `.sheet(item:)` (the fork prompt).
+private struct ForkTarget: Identifiable { let id: String }
+
 struct SessionListScreen: View {
     @Environment(\.appColors) private var p
     @Bindable var store: AppStore
@@ -13,6 +16,8 @@ struct SessionListScreen: View {
     @State private var createOpen = false
     @State private var actionsFor: Session?
     @State private var deleteConfirmFor: String?
+    @State private var forkFor: String?
+    @State private var forkName = ""
     @State private var createName = ""
     /// Subsession tree: ids the user manually expanded (collapsed by default).
     @State private var expanded = Set<String>()
@@ -164,11 +169,24 @@ struct SessionListScreen: View {
             titleVisibility: .visible
         ) {
             if let s = actionsFor {
+                // Fork WITHOUT opening the session (webui parity).
+                Button(t("fork")) {
+                    forkFor = s.id
+                }
                 if store.isUnread(s) {
                     // label-only, matching the other three clients' action sheets
                     Button(t("markRead")) { store.markSessionRead(s.id) }
                 }
                 Button(t("deleteSession"), role: .destructive) { deleteConfirmFor = s.id }
+            }
+        }
+        .sheet(item: Binding(get: { forkFor.map { ForkTarget(id: $0) } }, set: { if $0 == nil { forkFor = nil } })) { target in
+            inputSheet(title: t("fork"), text: $forkName, confirm: t("fork")) { branch in
+                guard !branch.isEmpty else { return }
+                Task {
+                    _ = try? await store.api.fork(target.id, branch: branch)
+                    await store.refreshSessions()
+                }
             }
         }
     }

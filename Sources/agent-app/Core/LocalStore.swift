@@ -29,6 +29,23 @@ final class LocalStore: @unchecked Sendable {
         for stmt in LocalStore.schema.split(separator: ";") where !stmt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             try exec(String(stmt))
         }
+        // v5 cache migration: the message ORIGIN `source` column. When absent,
+        // drop the message cache + anchors so the next open refetches with
+        // source intact (source-less rows would misrender a hand-off).
+        if !hasColumn("local_messages", "source") {
+            try exec("ALTER TABLE local_messages ADD COLUMN source TEXT DEFAULT ''")
+            try exec("DELETE FROM local_messages")
+            try exec("DELETE FROM local_sync_state")
+        }
+    }
+
+    private func hasColumn(_ table: String, _ column: String) -> Bool {
+        guard let stmt = try? prepare("PRAGMA table_info(\(table))") else { return false }
+        defer { sqlite3_finalize(stmt) }
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            if let c = sqlite3_column_text(stmt, 1), String(cString: c) == column { return true }
+        }
+        return false
     }
 
     private static let schema = """
@@ -42,7 +59,7 @@ final class LocalStore: @unchecked Sendable {
     CREATE TABLE IF NOT EXISTS local_messages (
       session_id TEXT NOT NULL, id TEXT NOT NULL, role TEXT, prev_id TEXT DEFAULT '',
       created_at TEXT DEFAULT '', order_key INTEGER, status TEXT DEFAULT 'complete',
-      parts_json TEXT DEFAULT '[]', PRIMARY KEY (session_id, id));
+      parts_json TEXT DEFAULT '[]', source TEXT DEFAULT '', PRIMARY KEY (session_id, id));
     CREATE TABLE IF NOT EXISTS local_sync_state (
       session_id TEXT PRIMARY KEY, oldest_id TEXT DEFAULT '', has_more INTEGER DEFAULT 1, tip_id TEXT DEFAULT '');
     CREATE TABLE IF NOT EXISTS local_drafts (
@@ -156,13 +173,14 @@ final class LocalStore: @unchecked Sendable {
 
     func loadMessages(_ sessionId: String) throws -> [ChatMessage] {
         try query(
-            "SELECT id, role, prev_id, created_at, order_key, status, parts_json FROM local_messages WHERE session_id = ? ORDER BY order_key ASC",
+            "SELECT id, role, prev_id, created_at, order_key, status, parts_json, source FROM local_messages WHERE session_id = ? ORDER BY order_key ASC",
             [sessionId]
         ) { s in
             ChatMessage(
                 id: colText(s, 0), role: colText(s, 1), status: colText(s, 5),
                 parts: LocalJson.partsFrom(colText(s, 6)),
-                createdAt: colText(s, 3), seq: colInt(s, 4), prevId: colText(s, 2)
+                createdAt: colText(s, 3), seq: colInt(s, 4), prevId: colText(s, 2),
+                source: colText(s, 7)
             )
         }
     }
@@ -185,10 +203,11 @@ final class LocalStore: @unchecked Sendable {
             order += 1
             for m in msgs {
                 let j = LocalJson.partsOf(m.parts)
-                try run("INSERT OR REPLACE INTO local_messages VALUES (?,?,?,?,?,?,?,?)") { s in
+                try run("INSERT OR REPLACE INTO local_messages VALUES (?,?,?,?,?,?,?,?,?)") { s in
                     bind(s, 1, sessionId); bind(s, 2, m.id); bind(s, 3, m.role)
                     bind(s, 4, m.prevId); bind(s, 5, m.createdAt ?? "")
                     bind(s, 6, Int32(order)); bind(s, 7, "complete"); bind(s, 8, j)
+                    bind(s, 9, m.source)
                 }
                 order += 1
             }
@@ -206,10 +225,11 @@ final class LocalStore: @unchecked Sendable {
             try run("DELETE FROM local_messages WHERE session_id = ?") { bind($0, 1, sessionId) }
             var order: Int32 = 0
             for m in msgs where !m.isLocal {
-                try run("INSERT OR REPLACE INTO local_messages VALUES (?,?,?,?,?,?,?,?)") { s in
+                try run("INSERT OR REPLACE INTO local_messages VALUES (?,?,?,?,?,?,?,?,?)") { s in
                     bind(s, 1, sessionId); bind(s, 2, m.id); bind(s, 3, m.role)
                     bind(s, 4, m.prevId); bind(s, 5, m.createdAt)
                     bind(s, 6, order); bind(s, 7, m.status); bind(s, 8, LocalJson.chatPartsOf(m.parts))
+                    bind(s, 9, m.source)
                 }
                 order += 1
             }

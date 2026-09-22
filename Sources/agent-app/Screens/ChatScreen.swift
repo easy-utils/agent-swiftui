@@ -248,11 +248,14 @@ struct ChatScreen: View {
                             .padding(.vertical, 4)
                         }
                         ForEach(ctrl.sorted) { msg in
-                            MessageBubble(msg: msg, api: store.api) {
-                                Task { await ctrl.revert(msg.id) }
-                            } onResend: { newText in
-                                Task { await ctrl.resendFrom(msg, newText) }
-                            }
+                            MessageBubble(
+                                msg: msg, api: store.api,
+                                onUndo: { Task { await ctrl.revert(msg.id) } },
+                                onResend: { newText in Task { await ctrl.resendFrom(msg, newText) } },
+                                sessionId: store.activeSessionId ?? "",
+                                onOpenSession: { name in store.pickSession(name) },
+                                sessionExists: { name in store.sessionById(name) != nil }
+                            )
                             .id(msg.id)
                         }
                         GeometryReader { g in
@@ -893,6 +896,32 @@ func fmtTime(_ iso: String) -> String {
     return "\(Calendar.current.component(.month, from: d))/\(Calendar.current.component(.day, from: d)) \(hm)"
 }
 
+/// Provenance chip shown inside a bubble whose message came from another
+/// session (`session:{name}`) or automation (`system:{name}`).
+struct SourceChip: View {
+    let isSession: Bool
+    let name: String
+    let canOpen: Bool
+    var onOpen: () -> Void = {}
+
+    var body: some View {
+        let fg = isSession ? Color(red: 0x02/255, green: 0x84/255, blue: 0xC7/255)
+                           : Color(red: 0x7C/255, green: 0x3A/255, blue: 0xED/255)
+        let bg = isSession ? Color(red: 0x0E/255, green: 0xA5/255, blue: 0xE9/255).opacity(0.15)
+                           : Color(red: 0x8B/255, green: 0x5C/255, blue: 0xF6/255).opacity(0.15)
+        let label = isSession ? t("mailboxFromSession") : t("mailboxFromSystem")
+        let chip = HStack(spacing: 4) {
+            AppIcon(isSession ? AppIcons.chat : AppIcons.bolt).frame(width: 12, height: 12).foregroundStyle(fg)
+            Text(label).appFont(.micro).fontWeight(.semibold).foregroundStyle(fg)
+            if !name.isEmpty { Text("· \(name)").appFont(.micro).foregroundStyle(fg.opacity(0.8)) }
+        }
+        .padding(.horizontal, 6).padding(.vertical, 2)
+        .background(bg, in: RoundedRectangle(cornerRadius: 10))
+        .onTapGesture { if canOpen { onOpen() } }
+        return chip
+    }
+}
+
 // MessageBubble — reasoning-first ordering, tool cards, actions row.
 
 struct MessageBubble: View {
@@ -901,6 +930,12 @@ struct MessageBubble: View {
     let api: AgentApi
     var onUndo: () -> Void
     var onResend: (String) -> Void
+    /// The OPEN session id (seeds the left-side assistant avatar).
+    var sessionId: String = ""
+    /// Open the session named by a `session:{name}` source (jump to it).
+    var onOpenSession: ((String) -> Void)?
+    /// Whether a `session:{name}` source still resolves to a live session.
+    var sessionExists: ((String) -> Bool)?
 
     @State private var reasoningOpen = false
     @State private var compactionOpen = false
@@ -918,11 +953,33 @@ struct MessageBubble: View {
         msg.parts.filter { $0.type == "reasoning" } + msg.parts.filter { $0.type != "reasoning" }
     }
 
+    // Message ORIGIN (msg.source): '' (agent/legacy user) | 'user' | 'session:X'
+    // | 'system:X'. A `session:X` message is INCOMING (left, sender avatar) even
+    // though role is `user`; `system:X` renders as a centred notice. Only the
+    // reader's OWN prompt stays right-aligned, with NO avatar (left only).
+    private var sourceKind: String {
+        if msg.source.hasPrefix("session:") { return "session" }
+        if msg.source.hasPrefix("system:") { return "system" }
+        return (msg.source.isEmpty || msg.source == "user") ? "user" : "other"
+    }
+    private var sourceName: String {
+        sourceKind == "session" ? String(msg.source.dropFirst("session:".count))
+            : sourceKind == "system" ? String(msg.source.dropFirst("system:".count)) : ""
+    }
+
     var body: some View {
-        let isUser = msg.role == "user"
+        let isRoleUser = msg.role == "user"
         let isError = msg.role == "error"
-        let isSystem = msg.role == "system" || msg.role == "event"
+        let isRoleSystem = msg.role == "system" || msg.role == "event"
         let isStreaming = msg.status == "streaming"
+        let isSending = msg.status == "pending"
+        let isSystem = isRoleSystem || sourceKind == "system"
+        let isUser = isRoleUser && sourceKind != "session"
+        let incoming = !isUser && !isSystem
+        let canOpenSession = sourceKind == "session"
+            && onOpenSession != nil && (sessionExists?(sourceName) ?? true)
+        let avatarSeed = sourceKind == "session" ? sourceName : (sessionId.isEmpty ? "assistant" : sessionId)
+        let showAvatar = incoming && !isError && !isSending
 
         VStack(alignment: isSystem ? .center : (isUser ? .trailing : .leading), spacing: 0) {
             if isStreaming && ordered.isEmpty {
@@ -931,33 +988,60 @@ struct MessageBubble: View {
                     Text(t("thinking")).appFont(.micro).foregroundStyle(p.mutedForeground)
                 }
             } else {
-                VStack(alignment: .leading, spacing: AppSpacing.sm) {
-                    if isError {
-                        Text(t("error")).appFont(.micro).fontWeight(.semibold).foregroundStyle(p.destructive)
+                // Avatars live ABOVE the bubble, flush to the left edge.
+                if showAvatar {
+                    HStack {
+                        if canOpenSession {
+                            Button { onOpenSession?(sourceName) } label: {
+                                ChatAvatar(seed: avatarSeed, size: 28)
+                            }.buttonStyle(.plain)
+                        } else {
+                            ChatAvatar(seed: avatarSeed, size: 28)
+                        }
+                        Spacer()
                     }
-                    ForEach(ordered) { part in
-                        partView(part, p, isStreaming)
-                    }
+                    .padding(.bottom, 4)
                 }
-                .padding(.horizontal, AppSpacing.md)
-                .padding(.vertical, 10)
-                .fixedSize(horizontal: false, vertical: true)
-                .background(
-                    isError ? p.destructive.opacity(0.1)
-                    : isSystem ? p.muted.opacity(0.3)
-                    : isUser ? p.primary.opacity(0.12)
-                    : p.card,
-                    in: RoundedRectangle(cornerRadius: AppRadius.md)
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: AppRadius.md).stroke(
-                        isError ? p.destructive.opacity(0.4)
-                        : isSystem ? p.mutedForeground.opacity(0.25)
-                        : isUser ? p.primary.opacity(0.4)
-                        : p.border.opacity(0.5)
+                HStack(spacing: AppSpacing.sm) {
+                    // Sending spinner sits to the LEFT of the user bubble.
+                    if isSending { ProgressView().controlSize(.small) }
+                    VStack(alignment: .leading, spacing: AppSpacing.sm) {
+                        if isError {
+                            Text(t("error")).appFont(.micro).fontWeight(.semibold).foregroundStyle(p.destructive)
+                        }
+                        // Source chip: "来自会话 · {name}" / "来自系统 · {name}".
+                        if sourceKind == "session" || sourceKind == "system" {
+                            SourceChip(isSession: sourceKind == "session", name: sourceName, canOpen: canOpenSession) {
+                                onOpenSession?(sourceName)
+                            }
+                        }
+                        ForEach(ordered) { part in
+                            partView(part, p, isStreaming)
+                        }
+                    }
+                    .padding(.horizontal, AppSpacing.md)
+                    .padding(.vertical, 10)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .background(
+                        isError ? p.destructive.opacity(0.1)
+                        : isSystem ? p.muted.opacity(0.3)
+                        : isUser ? p.primary.opacity(0.12)
+                        : sourceKind == "session" ? Color(red: 0x0E/255, green: 0xA5/255, blue: 0xE9/255).opacity(0.10)
+                        : p.card,
+                        in: RoundedRectangle(cornerRadius: AppRadius.md)
                     )
-                )
-                if !isStreaming && !isSystem {
+                    .overlay(
+                        RoundedRectangle(cornerRadius: AppRadius.md).stroke(
+                            isError ? p.destructive.opacity(0.4)
+                            : isSystem ? p.mutedForeground.opacity(0.25)
+                            : isUser ? p.primary.opacity(0.4)
+                            : sourceKind == "session" ? Color(red: 0x0E/255, green: 0xA5/255, blue: 0xE9/255).opacity(0.4)
+                            : p.border.opacity(0.5)
+                        )
+                    )
+                    if !isUser && !isSystem { Spacer(minLength: 0) }
+                }
+                if !isStreaming && !isSystem && !isSending {
                     HStack(spacing: 2) {
                         if msg.parts.contains(where: { $0.type == "text" || $0.type == "reasoning" }) {
                             IconAction(slot: AppIcons.copy, label: t("copy")) {
