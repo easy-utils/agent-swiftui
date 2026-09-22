@@ -9,7 +9,6 @@ final class MessagesController {
     private let api: AgentApi
     private let getSessionId: () -> String
     private let local: LocalStore?
-    private let sendFailed: (Error) -> String
 
     var messages: [ChatMessage] = []
     var sending = false
@@ -34,11 +33,10 @@ final class MessagesController {
     private var idleProbeTask: Task<Void, Never>?
     private var lastActivity = Date.distantPast
 
-    init(api: AgentApi, getSessionId: @escaping () -> String, local: LocalStore?, sendFailed: @escaping (Error) -> String) {
+    init(api: AgentApi, getSessionId: @escaping () -> String, local: LocalStore?) {
         self.api = api
         self.getSessionId = getSessionId
         self.local = local
-        self.sendFailed = sendFailed
     }
 
     var sorted: [ChatMessage] {
@@ -406,7 +404,7 @@ final class MessagesController {
             } else {
                 finishStreaming()
             }
-        case "error", "provider-error":
+        case "error":
             let errObj = params["error"]
             let content: String
             if let s = errObj as? String { content = s }
@@ -415,7 +413,7 @@ final class MessagesController {
             } else {
                 content = (params["message"].map { String(describing: $0) }) ?? "Unknown error"
             }
-            addError(content)
+            addError(content, kind: "model")
             sending = false
             revision += 1
         default:
@@ -598,14 +596,21 @@ final class MessagesController {
         } catch {}
     }
 
-    private func addError(_ text: String) {
+    /// Drop every local error bubble. Called when the user sends a new prompt:
+    /// an error is a TRANSIENT state, cleared by the next send.
+    private func clearErrors() {
+        guard messages.contains(where: { $0.role == "error" }) else { return }
+        messages.removeAll { $0.role == "error" }
+    }
+
+    private func addError(_ text: String, kind: String = "model") {
         let now = Int(Date().timeIntervalSince1970 * 1000)
         messages.removeAll { $0.status == "streaming" }
         messages.append(
             ChatMessage(
                 id: "err\(now)", role: "error", status: "error",
                 parts: [ChatPart(id: "p\(now)", type: "text", text: text)],
-                createdAt: nowIso(), seq: nextSeq, isLocal: true
+                createdAt: nowIso(), seq: nextSeq, isLocal: true, errorKind: kind
             )
         )
         nextSeq += 1
@@ -617,6 +622,9 @@ final class MessagesController {
         guard !trimmed.isEmpty || !attachments.isEmpty else { return }
         guard !sending else { return }
         sending = true
+        // An error is TRANSIENT: a new prompt clears any prior error card,
+        // BEFORE the RPC so a send failure re-adds its own below.
+        clearErrors()
         let codes = attachments.map { $0.code }
         // No client-optimistic user bubble: the server AUTHORS the message id
         // and chain position and announces it via `message-added{role:user}`
@@ -626,7 +634,8 @@ final class MessagesController {
         do {
             _ = try await api.prompt(getSessionId(), trimmed, attachments: codes)
         } catch {
-            addError(sendFailed(error))
+            // The card TITLE says what failed; the body is the raw error.
+            addError(String(describing: error), kind: "send")
             Task { @MainActor in AuthGate.notify(error) }
             sending = false
             revision += 1

@@ -39,9 +39,7 @@ struct ChatScreen: View {
         let id = sid
         guard !id.isEmpty else { return nil }
         if let c = controllers[id] { return c }
-        let c = MessagesController(api: store.api, getSessionId: { id }, local: store.local) {
-            t("sendFailed", $0.localizedDescription)
-        }
+        let c = MessagesController(api: store.api, getSessionId: { id }, local: store.local)
         // Bind to exactly ONE live controller: every other visited session's
         // controller is disposed here. Each one holds a live stream + a 30s
         // idle probe whose captured getSessionId would keep RECONNECTING the
@@ -1007,7 +1005,8 @@ struct MessageBubble: View {
                     if isSending { ProgressView().controlSize(.small) }
                     VStack(alignment: .leading, spacing: AppSpacing.sm) {
                         if isError {
-                            Text(t("error")).appFont(.micro).fontWeight(.semibold).foregroundStyle(p.destructive)
+                            Text(msg.errorKind == "send" ? t("sendFailedTitle") : t("modelError"))
+                                .appFont(.micro).fontWeight(.semibold).foregroundStyle(p.destructive)
                         }
                         // Source chip: "来自会话 · {name}" / "来自系统 · {name}".
                         if sourceKind == "session" || sourceKind == "system" {

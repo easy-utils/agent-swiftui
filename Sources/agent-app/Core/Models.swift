@@ -117,6 +117,8 @@ struct ChatMessage: Identifiable {
     var isLocal: Bool = false
     /// ORIGIN of the message ('' for agent-authored).
     var source: String = ""
+    /// For a local error bubble: what failed ('send' | 'model').
+    var errorKind: String = ""
 }
 
 enum UploadState: String { case idle, uploading, done, error }

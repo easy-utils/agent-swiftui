@@ -236,6 +236,8 @@ private let en: [String: String] = [
   "sending": "Sending…",
   "noMoreMessages": "No more messages",
   "forked": "Forked",
+  "sendFailedTitle": "Send failed",
+  "modelError": "Model error",
 ]
 
 private let zh: [String: String] = [
@@ -441,4 +443,6 @@ private let zh: [String: String] = [
   "sending": "发送中…",
   "noMoreMessages": "没有更多消息",
   "forked": "已派生",
+  "sendFailedTitle": "发送失败",
+  "modelError": "模型错误",
 ]
