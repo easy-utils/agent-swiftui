@@ -289,14 +289,17 @@ final class AppStore {
 
     func bumpProvidersRevision() { providersRevision += 1 }
 
-    func beginProviderDraft(_ existing: ProviderInfo?) {
+    func beginProviderDraft(_ existing: ProviderInfo?, capability: String = "text") {
         if let p = existing {
             providerDraft = ProviderDraft(
-                originalId: p.providerId, id: p.providerId, apiType: p.apiType,
-                baseUrl: p.baseUrl, apiKey: p.apiKey, models: p.models
+                originalId: p.providerId, id: p.providerId, capability: p.capability,
+                apiType: p.apiType, baseUrl: p.baseUrl, apiKey: p.apiKey, models: p.models
             )
         } else {
-            providerDraft = ProviderDraft()
+            // New provider: the section that opened the form fixes the modality.
+            var d = ProviderDraft()
+            d.capability = capability
+            providerDraft = d
         }
     }
 

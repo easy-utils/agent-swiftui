@@ -120,7 +120,7 @@ final class AgentApi: @unchecked Sendable, MessageTransport {
         req.attachments = attachments.map { c in
             var ref = Agent_V1_FileRef(); ref.code = c; return ref
         }
-        for try await msg in agent.prompt(req: req) {
+        for try await msg in try await agent.prompt(req: req) {
             if msg.event == "accepted", let mid = msg.params["message_id"] {
                 return mid
             }
@@ -244,7 +244,7 @@ final class AgentApi: @unchecked Sendable, MessageTransport {
                 do {
                     var req = Agent_V1_WatchSessionRequest()
                     req.id = sessionId; req.since = since
-                    for try await msg in self.agent.watchSession(req: req) {
+                    for try await msg in try await self.agent.watchSession(req: req) {
                         let params = structToJson(msg.params)
                         continuation.yield(
                             StreamEvent(
@@ -266,7 +266,7 @@ final class AgentApi: @unchecked Sendable, MessageTransport {
         AsyncThrowingStream { continuation in
             let task = Task {
                 do {
-                    for try await msg in self.agent.watchSessions(req: Agent_V1_WatchSessionsRequest()) {
+                    for try await msg in try await self.agent.watchSessions(req: Agent_V1_WatchSessionsRequest()) {
                         continuation.yield(
                             SessionListEvent(
                                 snapshot: msg.snapshot,

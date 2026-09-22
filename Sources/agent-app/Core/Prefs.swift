@@ -47,7 +47,7 @@ enum Prefs {
     /// Whether the SYSTEM UI language is Chinese — resolves the "system"
     /// language preference (en otherwise).
     static var systemLangZh: Bool {
-        Locale.current.language.languageCode?.hasPrefix("zh") == true
+        Locale.current.language.languageCode?.identifier.hasPrefix("zh") == true
     }
 
     static var agentLocale: String {

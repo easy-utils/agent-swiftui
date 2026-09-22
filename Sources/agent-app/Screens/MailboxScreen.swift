@@ -1,4 +1,5 @@
 import SwiftUI
+import LucideSwift
 
 // MailboxScreen — the session's deferred-message list. NEWEST-FIRST, paged
 // backward for infinite scroll, each entry classified by (msgType, source).

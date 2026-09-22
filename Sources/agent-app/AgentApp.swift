@@ -115,8 +115,8 @@ struct AgentApp: App {
                 onBack: { phase = store != nil ? .app : .setup }
             )
         case .app:
-            if let store {
-                ShellView(store: store, themeMode: $themeMode, onAddUser: {
+            if let s = store {
+                ShellView(store: s, themeMode: $themeMode, onAddUser: {
                     Prefs.clearActive()
                     store = nil
                     phase = .setup

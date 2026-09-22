@@ -1,4 +1,5 @@
 import SwiftUI
+import LucideSwift
 import PhotosUI
 
 // ChatScreen — port of flutter screens/chat.dart (top bar, streaming bubbles,
@@ -11,6 +12,8 @@ struct ChatScreen: View {
     @State private var text = ""
     @State private var attachments: [UploadedFile] = []
     @State private var recording = false
+    /// Composer send in flight (upload wait + deliver); shows the spinner.
+    @State private var sending = false
     @State private var attachSheet = false
     @State private var settingsOpen = false
     @State private var infoOpen = false
@@ -610,14 +613,29 @@ struct ChatScreen: View {
 
     private func send() {
         guard let ctrl = controller else { return }
-        let files = attachments.filter { !$0.code.hasPrefix("tmp-") }
+        guard !sending else { return }
+        sending = true
         let body = text
-        text = ""
-        attachments = []
-        store.clearDraft(sid)
-        // A freshly sent message always lands at the bottom.
-        followBottom = true
-        Task { await ctrl.send(body, attachments: files) }
+        Task {
+            // Wait for every in-flight upload, then enforce ALL-or-nothing: a
+            // partial batch is never sent (flutter `_send`).
+            while attachments.contains(where: { $0.isUploading }) {
+                try? await Task.sleep(nanoseconds: 80_000_000)
+            }
+            let failed = attachments.filter { $0.hasError || $0.code.isEmpty }
+            if !failed.isEmpty {
+                sending = false
+                return
+            }
+            let files = attachments.filter { !$0.code.hasPrefix("tmp-") }
+            text = ""
+            attachments = []
+            store.clearDraft(sid)
+            // A freshly sent message always lands at the bottom.
+            followBottom = true
+            sending = false
+            await ctrl.send(body, attachments: files)
+        }
     }
 
     private func upload(urls: [URL]) {
@@ -961,8 +979,13 @@ struct MessageBubble: View {
         return (msg.source.isEmpty || msg.source == "user") ? "user" : "other"
     }
     private var sourceName: String {
-        sourceKind == "session" ? String(msg.source.dropFirst("session:".count))
-            : sourceKind == "system" ? String(msg.source.dropFirst("system:".count)) : ""
+        if sourceKind == "session" {
+            return String(msg.source.dropFirst("session:".count))
+        }
+        if sourceKind == "system" {
+            return String(msg.source.dropFirst("system:".count))
+        }
+        return ""
     }
 
     var body: some View {

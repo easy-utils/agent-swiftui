@@ -1,4 +1,5 @@
 import SwiftUI
+import LucideSwift
 
 // ConfigScreen — root list + drill-ins (appearance / backends / presets /
 // tools / language).

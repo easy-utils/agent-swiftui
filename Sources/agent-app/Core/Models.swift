@@ -192,6 +192,8 @@ struct ToolConfigKnob {
     var kind: String = "value"
     /// When kind == "model": the modality the reference must match.
     var capability: String = ""
+    /// A `model` knob stores a provider_id/model_id reference, not free text.
+    var isModelRef: Bool { kind == "model" }
     var enumValues: [String] = []
     var defaultValue: Any?
     var description: String = ""

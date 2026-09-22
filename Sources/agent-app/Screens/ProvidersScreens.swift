@@ -1,4 +1,5 @@
 import SwiftUI
+import LucideSwift
 
 /** Localized capability label. */
 func capabilityLabelKey(_ capability: String) -> String {
@@ -205,7 +206,7 @@ struct ProviderFormScreen: View {
             if let d = draft {
                 ScrollView {
                     VStack(alignment: .leading, spacing: AppSpacing.md) {
-                        AppField(t("providerIdReq"), text: $id, placeholder: "", disabled: d.isEdit)
+                        AppField(t("providerIdReq"), text: $id, disabled: d.isEdit, placeholder: "")
                         HStack {
                             AppIcon(capabilityIcon(d.capability)).foregroundStyle(p.mutedForeground).frame(width: 24)
                             Text(t(capabilityLabelKey(d.capability))).appFont(.meta).foregroundStyle(p.mutedForeground)

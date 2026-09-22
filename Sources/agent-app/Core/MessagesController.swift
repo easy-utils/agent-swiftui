@@ -15,6 +15,10 @@ final class MessagesController {
     var loading = false
     var hasMore = false
     var revision = 0
+    /// Count of stream events APPLIED (not merely received). The conformance
+    /// suite waits on this so it never asserts against a half-drained stream —
+    /// the async consumer pulls an event, then applies it on the next tick.
+    private(set) var eventsApplied = 0
 
     private var syncedTipId = ""
     private var syncedOldestId = ""
@@ -279,6 +283,7 @@ final class MessagesController {
     }
 
     private func handleEvent(_ ev: StreamEvent) {
+        defer { eventsApplied += 1 }
         lastActivity = Date()
         if !ev.eid.isEmpty {
             guard seenEids.insert(ev.eid).inserted else { return }
@@ -456,8 +461,20 @@ final class MessagesController {
         messages.filter { $0.isLocal && ($0.status == "streaming" || $0.status == "pending") }
     }
 
+    /// ISO-8601 with MILLISECOND precision. Second-granularity (the
+    /// ISO8601DateFormatter default) makes a user bubble and the assistant
+    /// placeholder created in the same second TIE, so `renumber`'s stable
+    /// tie-break would then preserve whatever array order a concurrent
+    /// baseline/merge happened to leave — drawing the reply above its prompt.
+    /// Flutter's `toIso8601String()` carries microseconds; match that.
+    private static let isoMillis: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return f
+    }()
+
     private func nowIso() -> String {
-        ISO8601DateFormatter().string(from: Date())
+        Self.isoMillis.string(from: Date())
     }
 
     /// The server-authored `message_id` stamped on a part, else the current

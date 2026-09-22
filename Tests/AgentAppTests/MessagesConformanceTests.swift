@@ -23,12 +23,18 @@ final class MessagesConformanceTests: XCTestCase {
         private var waiters: [CheckedContinuation<StreamEvent?, Never>] = []
         private var queue: [StreamEvent] = []
         private var closed = false
+        /// Events handed to the consumer vs pushed. `settle` waits for
+        /// delivered == pushed so a slow async-stream consumer cannot be
+        /// asserted against mid-flight (a real flake on macOS).
+        private(set) var pushed = 0
+        private(set) var delivered = 0
 
         func failPrompt(_ msg: String) { promptErr = msg }
         func clearPromptError() { promptErr = nil }
         func persist(_ msgs: Message...) { chain.append(contentsOf: msgs) }
 
         func push(_ ev: StreamEvent) {
+            pushed += 1
             if let w = waiters.first {
                 waiters.removeFirst()
                 w.resume(returning: ev)
@@ -38,9 +44,16 @@ final class MessagesConformanceTests: XCTestCase {
         }
 
         func next() async -> StreamEvent? {
-            if !queue.isEmpty { return queue.removeFirst() }
-            if closed { return nil }
-            return await withCheckedContinuation { c in waiters.append(c) }
+            let ev: StreamEvent?
+            if !queue.isEmpty {
+                ev = queue.removeFirst()
+            } else if closed {
+                return nil
+            } else {
+                ev = await withCheckedContinuation { c in waiters.append(c) }
+            }
+            delivered += 1
+            return ev
         }
     }
 
@@ -130,7 +143,7 @@ final class MessagesConformanceTests: XCTestCase {
         let server = FakeServer()
         let ctrl = MessagesController(api: FakeTransport(server), getSessionId: { "s1" }, local: nil)
         ctrl.init_()
-        await settle()
+        await settle(ctrl, server)
 
         switch id {
         case "boot_empty":
@@ -138,7 +151,7 @@ final class MessagesConformanceTests: XCTestCase {
             XCTAssertFalse(ctrl.sending, id)
 
         case "happy_path":
-            await ctrl.send("hi"); await settle()
+            await ctrl.send("hi"); await settle(ctrl, server)
             server.push(ev("status", ["type": "busy"]))
             server.persist(msg("u1", "user", "", [text("p0", "hi")]))
             server.push(ev("message-added", ["message_id": "u1", "prev_id": "", "role": "user"]))
@@ -150,7 +163,7 @@ final class MessagesConformanceTests: XCTestCase {
             server.push(ev("tool-input-delta", ["id": "tc1", "delta": "{\"q\":\"x\"}"]))
             server.push(ev("tool-call", ["toolCallId": "tc1", "toolName": "web.search", "input": ["q": "x"]]))
             server.push(ev("tool-result", ["toolCallId": "tc1", "output": "found 1"]))
-            await settle()
+            await settle(ctrl, server)
             XCTAssertEqual(ctrl.messages.map { $0.id }, ["u1", "a1"], id)
             let mid = ctrl.messages.first { $0.id == "a1" }!
             XCTAssertEqual(mid.status, "streaming", id)
@@ -162,7 +175,7 @@ final class MessagesConformanceTests: XCTestCase {
 
             server.persist(msg("a1", "assistant", "u1", [text("t0", "Hello world"), tool("tc1", "web.search")]))
             server.push(ev("turn-complete", ["reason": "stop"]))
-            await settle()
+            await settle(ctrl, server)
             XCTAssertFalse(ctrl.sending, id)
             XCTAssertEqual(ctrl.messages.map { $0.id }, ["u1", "a1"], id)
             let a1 = ctrl.messages.first { $0.id == "a1" }!
@@ -172,10 +185,10 @@ final class MessagesConformanceTests: XCTestCase {
 
         case "replay_reorder":
             server.push(ev("text-delta", ["id": "t0", "text": "Hi", "message_id": "a1"]))
-            await settle()
+            await settle(ctrl, server)
             XCTAssertEqual(ctrl.messages.filter { $0.id == "a1" }.count, 1, id)
             server.push(ev("message-added", ["message_id": "a1", "prev_id": "", "role": "assistant", "streaming": true]))
-            await settle()
+            await settle(ctrl, server)
             let hits = ctrl.messages.filter { $0.id == "a1" }
             XCTAssertEqual(hits.count, 1, id)
             XCTAssertEqual(hits[0].parts.map { $0.text ?? "" }.joined(), "Hi", id)
@@ -184,17 +197,17 @@ final class MessagesConformanceTests: XCTestCase {
         case "multi_step":
             server.push(ev("message-added", ["message_id": "a1", "prev_id": "", "role": "assistant", "streaming": true]))
             server.push(ev("text-delta", ["id": "t0", "text": "step one", "message_id": "a1"]))
-            await settle()
+            await settle(ctrl, server)
             XCTAssertEqual(ctrl.messages.first { $0.id == "a1" }!.status, "streaming", id)
             server.persist(msg("a1", "assistant", "", [text("t0", "step one")]))
             server.push(ev("message-added", ["message_id": "a2", "prev_id": "a1", "role": "assistant", "streaming": true]))
             server.push(ev("text-delta", ["id": "t1", "text": "step two", "message_id": "a2"]))
-            await settle()
+            await settle(ctrl, server)
             XCTAssertEqual(ctrl.messages.first { $0.id == "a1" }!.status, "complete", id)
             XCTAssertEqual(ctrl.messages.first { $0.id == "a2" }!.status, "streaming", id)
             server.persist(msg("a2", "assistant", "a1", [text("t1", "step two")]))
             server.push(ev("turn-complete", ["reason": "stop"]))
-            await settle()
+            await settle(ctrl, server)
             XCTAssertEqual(ctrl.messages.map { $0.id }, ["a1", "a2"], id)
             XCTAssertTrue(ctrl.messages.allSatisfy { $0.status == "complete" }, id)
             XCTAssertTrue(ctrl.messages.allSatisfy { !$0.isLocal }, id)
@@ -204,7 +217,7 @@ final class MessagesConformanceTests: XCTestCase {
             server.push(ev("text-delta", ["id": "t0", "text": "Ha"], eid: "dup-eid"))
             server.push(ev("text-delta", ["id": "t0", "text": "Ha"], eid: "dup-eid"))
             server.push(ev("text-delta", ["id": "t0", "text": "Ha"], eid: "dup-eid"))
-            await settle()
+            await settle(ctrl, server)
             XCTAssertEqual(ctrl.messages.filter { $0.id == "a1" }.count, 1, id)
             XCTAssertEqual(ctrl.messages.first { $0.id == "a1" }!.parts.map { $0.text ?? "" }.joined(), "Ha", id)
 
@@ -212,16 +225,16 @@ final class MessagesConformanceTests: XCTestCase {
             server.push(ev("message-added", ["message_id": "a1", "prev_id": "", "role": "assistant", "streaming": true]))
             server.push(ev("text-delta", ["id": "t0", "text": "Hello", "message_id": "a1"]))
             server.push(ev("reasoning-delta", ["id": "r0", "text": "think", "message_id": "a1"]))
-            await settle()
+            await settle(ctrl, server)
             server.persist(msg("a1", "assistant", "", [text("srv-t0", "Hello"), reasoning("srv-r0", "think")]))
             server.push(ev("turn-complete", ["reason": "stop"]))
-            await settle()
+            await settle(ctrl, server)
             let before = ctrl.messages.first { $0.id == "a1" }!
             XCTAssertFalse(before.isLocal, id)
             XCTAssertEqual(before.parts.count, 2, id)
             server.push(ev("text-delta", ["id": "t0", "text": "Hello", "message_id": "a1"]))
             server.push(ev("reasoning-delta", ["id": "r0", "text": "think", "message_id": "a1"]))
-            await settle()
+            await settle(ctrl, server)
             let after = ctrl.messages.first { $0.id == "a1" }!
             XCTAssertEqual(after.parts.count, 2, id)
             XCTAssertEqual(after.parts.filter { $0.type == "reasoning" }.count, 1, id)
@@ -231,7 +244,7 @@ final class MessagesConformanceTests: XCTestCase {
             server.push(ev("message-added", ["message_id": "a1", "prev_id": "", "role": "assistant", "streaming": true]))
             server.push(ev("tool-call", ["toolCallId": "tc9", "toolName": "boom"]))
             server.push(ev("tool-error", ["toolCallId": "tc9", "error": ["message": "kaput"]]))
-            await settle()
+            await settle(ctrl, server)
             let toolPart = ctrl.messages.first { $0.id == "a1" }!.parts.first { $0.id == "tc9" }!
             XCTAssertEqual(toolPart.state?.status, "error", id)
             XCTAssertEqual(toolPart.state?.error, "kaput", id)
@@ -239,10 +252,10 @@ final class MessagesConformanceTests: XCTestCase {
         case "model_error":
             server.push(ev("status", ["type": "busy"]))
             server.push(ev("message-added", ["message_id": "a1", "prev_id": "", "role": "assistant", "streaming": true]))
-            await settle()
+            await settle(ctrl, server)
             XCTAssertTrue(ctrl.sending, id)
             server.push(ev("error", ["error": ["message": "upstream 500"]]))
-            await settle()
+            await settle(ctrl, server)
             XCTAssertFalse(ctrl.sending, id)
             let err = ctrl.messages.first { $0.role == "error" }!
             XCTAssertEqual(err.status, "error", id)
@@ -252,7 +265,7 @@ final class MessagesConformanceTests: XCTestCase {
 
         case "send_failure":
             server.failPrompt("mailbox down")
-            await ctrl.send("hi"); await settle()
+            await ctrl.send("hi"); await settle(ctrl, server)
             XCTAssertFalse(ctrl.sending, id)
             let err = ctrl.messages.first { $0.role == "error" }!
             XCTAssertEqual(err.errorKind, "send", id)
@@ -260,10 +273,10 @@ final class MessagesConformanceTests: XCTestCase {
 
         case "error_transient":
             server.failPrompt("mailbox down")
-            await ctrl.send("hi"); await settle()
+            await ctrl.send("hi"); await settle(ctrl, server)
             XCTAssertTrue(ctrl.messages.contains { $0.role == "error" }, id)
             server.clearPromptError()
-            await ctrl.send("again"); await settle()
+            await ctrl.send("again"); await settle(ctrl, server)
             XCTAssertEqual(ctrl.messages.filter { $0.role == "error" }.count, 0, id)
 
         default:
@@ -273,8 +286,17 @@ final class MessagesConformanceTests: XCTestCase {
         ctrl.dispose()
     }
 
-    /// Let queued main-actor work settle.
-    private func settle() async {
-        for _ in 0..<20 { await Task.yield() }
+    /// Let queued main-actor work settle: wait until the controller has
+    /// APPLIED every pushed event, then yield for any follow-on work. Waiting
+    /// on `eventsApplied` (not the stream pull) is what makes this
+    /// deterministic — the async consumer pulls an event, then applies it a
+    /// tick later, so a fixed yield count races.
+    private func settle(_ ctrl: MessagesController, _ server: FakeServer) async {
+        var spins = 0
+        while ctrl.eventsApplied < server.pushed && spins < 20_000 {
+            await Task.yield()
+            spins += 1
+        }
+        for _ in 0..<50 { await Task.yield() }
     }
 }
