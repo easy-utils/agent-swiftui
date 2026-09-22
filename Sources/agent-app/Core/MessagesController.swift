@@ -6,7 +6,7 @@ import Observation
 @Observable
 @MainActor
 final class MessagesController {
-    private let api: AgentApi
+    private let api: MessageTransport
     private let getSessionId: () -> String
     private let local: LocalStore?
 
@@ -33,7 +33,7 @@ final class MessagesController {
     private var idleProbeTask: Task<Void, Never>?
     private var lastActivity = Date.distantPast
 
-    init(api: AgentApi, getSessionId: @escaping () -> String, local: LocalStore?) {
+    init(api: MessageTransport, getSessionId: @escaping () -> String, local: LocalStore?) {
         self.api = api
         self.getSessionId = getSessionId
         self.local = local
@@ -110,8 +110,10 @@ final class MessagesController {
             messages = inFlightLocal() + chat
             renumber()
             hasMore = more
+            // Advance the anchor regardless of a local mirror, so the next
+            // reconcile is incremental (the mirror only adds persistence).
+            syncedTipId = chat.last?.id ?? ""
             if let l = local {
-                syncedTipId = chat.last?.id ?? ""
                 try? await l.applyServerMessages(sid, msgs, replace: true, tipId: syncedTipId)
                 syncedOldestId = (try? await l.oldestCachedId(sid)) ?? ""
             }
@@ -323,7 +325,16 @@ final class MessagesController {
         case "start-step", "text-start", "reasoning-start", "tool-input-start":
             let current = streamingId.flatMap { id in messages.first { $0.id == id } }
             let hasToolPart = current?.parts.contains { $0.type == "tool" } ?? false
-            guard let sid = ensureStreamingMsg(forceNew: event == "start-step" || (event == "text-start" && hasToolPart)) else { return }
+            let key = streamMsgId(params)
+            let forceNew = event == "start-step" || (event == "text-start" && hasToolPart)
+            let sid: String
+            if let k = key, messages.contains(where: { $0.id == k }) {
+                guard ensureStreamingMsgAt(k, params["prev_id"] as? String ?? "") else { return }
+                sid = k
+            } else {
+                guard let s = ensureStreamingMsg(forceNew: forceNew) else { return }
+                sid = s
+            }
             if event == "text-start", let pid = params["id"] as? String {
                 ensurePart(sid, pid, "text")
             } else if event == "reasoning-start", let pid = params["id"] as? String {
@@ -338,16 +349,16 @@ final class MessagesController {
             }
         case "text-delta":
             if let pid = params["id"] as? String, let text = params["text"] as? String {
-                guard let sid = ensureStreamingMsg(forceNew: false) else { return }
+                guard let sid = routeStreamMsg(params) else { return }
                 appendDelta(sid, pid, text, reasoning: false)
             }
         case "reasoning-delta":
             if let pid = params["id"] as? String, let text = params["text"] as? String {
-                guard let sid = ensureStreamingMsg(forceNew: false) else { return }
+                guard let sid = routeStreamMsg(params) else { return }
                 appendDelta(sid, "r\(pid)", text, reasoning: true)
             }
         case "tool-call":
-            guard let sid = ensureStreamingMsg(forceNew: false) else { return }
+            guard let sid = routeStreamMsg(params) else { return }
             if let tcId = (params["toolCallId"] ?? params["id"]) as? String {
                 addToolPart(sid, tcId,
                             (params["toolName"] ?? params["name"] ?? "tool") as? String ?? "tool",
@@ -368,11 +379,14 @@ final class MessagesController {
             guard let tcId = (params["toolCallId"] ?? params["id"]) as? String else { return }
             let errObj = params["error"]
             let errMsg: String
-            if let s = errObj as? String { errMsg = s }
-            else if let m = errObj as? [String: Any?], let msg = (m["message"] ?? params["message"]) {
+            if let s = errObj as? String {
+                errMsg = s
+            } else if let m = errObj as? [String: Any?], let msg = m["message"].flatMap({ $0 }) {
+                errMsg = String(describing: msg)
+            } else if let msg = params["message"].flatMap({ $0 }) {
                 errMsg = String(describing: msg)
             } else {
-                errMsg = (params["message"].map { String(describing: $0) }) ?? "tool error"
+                errMsg = "tool error"
             }
             updateToolResult(tcId, nil, errorMsg: errMsg)
         case "tool-output-denied":
@@ -383,7 +397,7 @@ final class MessagesController {
             // store; `code` is the file code. Render it as a file part (same
             // path as a persisted file part) on the streaming bubble.
             guard let code = params["code"] as? String, !code.isEmpty else { return }
-            guard let sid = ensureStreamingMsg(forceNew: false) else { return }
+            guard let sid = routeStreamMsg(params) else { return }
             let partId = "f\(code)"
             if messages.first(where: { $0.id == sid })?.parts.contains(where: { $0.id == partId }) == true { return }
             setMsg(sid) { m in
@@ -412,11 +426,14 @@ final class MessagesController {
         case "error":
             let errObj = params["error"]
             let content: String
-            if let s = errObj as? String { content = s }
-            else if let m = errObj as? [String: Any?], let msg = (m["message"] ?? params["message"]) {
+            if let s = errObj as? String {
+                content = s
+            } else if let m = errObj as? [String: Any?], let msg = m["message"].flatMap({ $0 }) {
+                content = String(describing: msg)
+            } else if let msg = params["message"].flatMap({ $0 }) {
                 content = String(describing: msg)
             } else {
-                content = (params["message"].map { String(describing: $0) }) ?? "Unknown error"
+                content = "Unknown error"
             }
             addError(content, kind: "model")
             sending = false
@@ -441,6 +458,25 @@ final class MessagesController {
 
     private func nowIso() -> String {
         ISO8601DateFormatter().string(from: Date())
+    }
+
+    /// The server-authored `message_id` stamped on a part, else the current
+    /// streaming bubble. Route by that id; never invent one (webui parity).
+    private func streamMsgId(_ params: [String: Any?]) -> String? {
+        if let id = params["message_id"] as? String, !id.isEmpty { return id }
+        return streamingId
+    }
+
+    /// Resolve the streaming bubble for a delta, opening it under the server id
+    /// when the delta arrives before its `message-added`. nil => skip.
+    private func routeStreamMsg(_ params: [String: Any?]) -> String? {
+        guard let key = streamMsgId(params) else { return nil }
+        if let existing = messages.first(where: { $0.id == key }) {
+            if !existing.isLocal { return nil } // persisted: replay duplicate
+            return key
+        }
+        guard ensureStreamingMsgAt(key, params["prev_id"] as? String ?? "") else { return nil }
+        return key
     }
 
     /// Returns the streaming bubble id, or nil when the target is a PERSISTED
@@ -594,22 +630,25 @@ final class MessagesController {
     }
 
     private func reconcile() async {
-        guard let l = local else { return }
+        // The in-memory merge ALWAYS runs (server ids/positions must be adopted
+        // even without a local mirror); persistence is best-effort.
         let sid = getSessionId()
         do {
             if syncedTipId.isEmpty {
                 await baseline(sid)
                 return
             }
-            let (msgs, resync, tipId) = try await api.messagesAfter(sid, after: syncedTipId)
+            let (msgs, resync, tipId) = try await api.messagesAfter(sid, after: syncedTipId, limit: 200)
             if resync {
                 await baseline(sid)
                 return
             }
             mergeServer(msgs, tipId: tipId)
             revision += 1
-            try? await l.persistMessages(sid, messages, tipId: syncedTipId)
-            syncedOldestId = (try? await l.oldestCachedId(sid)) ?? ""
+            if let l = local {
+                try? await l.persistMessages(sid, messages, tipId: syncedTipId)
+                syncedOldestId = (try? await l.oldestCachedId(sid)) ?? ""
+            }
         } catch {}
     }
 

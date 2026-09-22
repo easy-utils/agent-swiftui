@@ -39,5 +39,15 @@ let package = Package(
             // CoreText at launch by Theme.registerBundledFonts().
             resources: [.process("Resources")]
         ),
+        // Behavioural conformance tests for the message state machine. The
+        // controller + models + AgentApi facade are SwiftUI-free, but the app
+        // target links SwiftUI, so these run on Apple platforms (macOS CI); the
+        // guard still asserts every scenario id is referenced here.
+        .testTarget(
+            name: "AgentAppTests",
+            dependencies: ["agent-app"],
+            path: "Tests/AgentAppTests",
+            resources: [.copy("scenarios.json")]
+        ),
     ]
 )

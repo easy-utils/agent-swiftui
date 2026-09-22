@@ -33,7 +33,29 @@ private func decodeJson(_ data: String) -> [String: Any?] {
     return obj
 }
 
-final class AgentApi: @unchecked Sendable {
+/// The subset of the agent surface the message state machine drives. A
+/// protocol (not the concrete client) so the conformance suite can inject a
+/// scripted fake — mirroring the webui's `FakeServer`.
+protocol MessageTransport: AnyObject {
+    func prompt(_ id: String, _ prompt: String, attachments: [String]) async throws -> String
+    func messages(_ id: String, before: String?, limit: Int) async throws -> ([Message], Bool)
+    func messagesAfter(_ id: String, after: String, limit: Int) async throws -> ([Message], Bool, String)
+    func revert(_ id: String, messageId: String?) async throws
+    func interrupt(_ id: String) async throws -> Bool
+    func state(_ id: String) async throws -> (String, [Any?])
+    func streamEvents(_ sessionId: String, since: String) -> AsyncThrowingStream<StreamEvent, Error>
+}
+
+extension MessageTransport {
+    func messages(_ id: String, limit: Int = 30) async throws -> ([Message], Bool) {
+        try await messages(id, before: nil, limit: limit)
+    }
+    func messagesAfter(_ id: String, after: String) async throws -> ([Message], Bool, String) {
+        try await messagesAfter(id, after: after, limit: 200)
+    }
+}
+
+final class AgentApi: @unchecked Sendable, MessageTransport {
     let baseUrl: String
     let token: String
     private let agent: AgentServiceClient

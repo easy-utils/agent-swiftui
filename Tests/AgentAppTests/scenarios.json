@@ -1,0 +1,17 @@
+{
+  "$comment": "Behavioural conformance manifest for the Easy Agent clients. Each id names ONE scenario that every client's message-state-machine suite MUST cover, with the same assertions as the webui reference (abcp-sdk/webui/src/lib/messages.test.ts). `python3 conformance.py --check` fails if a client's suite does not reference every id, so a scenario cannot be silently dropped. The assertions themselves live in each client's native test (Kotlin/Dart/Swift) because the controllers are typed per language.",
+  "version": 1,
+  "reference": "abcp-sdk/webui/src/lib/messages.test.ts",
+  "scenarios": [
+    { "id": "boot_empty", "why": "an empty session boots with no optimistic bubbles" },
+    { "id": "happy_path", "why": "message-added -> deltas -> tool -> turn-complete -> reconcile; the user bubble is server-authored" },
+    { "id": "replay_reorder", "why": "a delta arriving before message-added must not duplicate the bubble" },
+    { "id": "multi_step", "why": "a new step message-added finalizes the prior streaming bubble" },
+    { "id": "eid_dedup", "why": "a replayed event (same eid) is applied exactly once" },
+    { "id": "reconnect_persisted", "why": "replayed deltas for a PERSISTED step must not duplicate its parts" },
+    { "id": "tool_error", "why": "tool-error marks the part error and keeps the bubble" },
+    { "id": "model_error", "why": "a model error event adds a local error bubble and clears sending" },
+    { "id": "send_failure", "why": "a deliver failure surfaces a send error bubble" },
+    { "id": "error_transient", "why": "sending a new prompt clears a prior error bubble (transient state)" }
+  ]
+}
