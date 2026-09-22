@@ -115,6 +115,18 @@ struct SessionListScreen: View {
                                 }
                             }
                         }
+                        // Leading swipe → fork (without opening); mirrors the
+                        // other clients' session-row context menu.
+                        .swipeActions(edge: .leading, allowsFullSwipe: false) {
+                            if !selectMode {
+                                Button {
+                                    forkFor = s.id
+                                } label: {
+                                    Label { Text(t("fork")) } icon: { AppIcon(AppIcons.fork) }
+                                }
+                                .tint(.blue)
+                            }
+                        }
                         .onTapGesture {
                             if selectMode {
                                 if selected.contains(s.id) { selected.remove(s.id) } else { selected.insert(s.id) }
