@@ -311,7 +311,10 @@ final class MessagesController {
                         }
                     }
                     streamingId = addedId
-                    ensureStreamingMsgAt(addedId, prevId)
+                    if !ensureStreamingMsgAt(addedId, prevId) {
+                        // Already persisted: a replay of a finished step.
+                        streamingId = nil
+                    }
                 } else if role == "user" {
                     upsertServerMessage(addedId, prevId, role: "user", source: src)
                 }
@@ -320,7 +323,7 @@ final class MessagesController {
         case "start-step", "text-start", "reasoning-start", "tool-input-start":
             let current = streamingId.flatMap { id in messages.first { $0.id == id } }
             let hasToolPart = current?.parts.contains { $0.type == "tool" } ?? false
-            let sid = ensureStreamingMsg(forceNew: event == "start-step" || (event == "text-start" && hasToolPart))
+            guard let sid = ensureStreamingMsg(forceNew: event == "start-step" || (event == "text-start" && hasToolPart)) else { return }
             if event == "text-start", let pid = params["id"] as? String {
                 ensurePart(sid, pid, "text")
             } else if event == "reasoning-start", let pid = params["id"] as? String {
@@ -335,14 +338,16 @@ final class MessagesController {
             }
         case "text-delta":
             if let pid = params["id"] as? String, let text = params["text"] as? String {
-                appendDelta(ensureStreamingMsg(forceNew: false), pid, text, reasoning: false)
+                guard let sid = ensureStreamingMsg(forceNew: false) else { return }
+                appendDelta(sid, pid, text, reasoning: false)
             }
         case "reasoning-delta":
             if let pid = params["id"] as? String, let text = params["text"] as? String {
-                appendDelta(ensureStreamingMsg(forceNew: false), "r\(pid)", text, reasoning: true)
+                guard let sid = ensureStreamingMsg(forceNew: false) else { return }
+                appendDelta(sid, "r\(pid)", text, reasoning: true)
             }
         case "tool-call":
-            let sid = ensureStreamingMsg(forceNew: false)
+            guard let sid = ensureStreamingMsg(forceNew: false) else { return }
             if let tcId = (params["toolCallId"] ?? params["id"]) as? String {
                 addToolPart(sid, tcId,
                             (params["toolName"] ?? params["name"] ?? "tool") as? String ?? "tool",
@@ -378,7 +383,7 @@ final class MessagesController {
             // store; `code` is the file code. Render it as a file part (same
             // path as a persisted file part) on the streaming bubble.
             guard let code = params["code"] as? String, !code.isEmpty else { return }
-            let sid = ensureStreamingMsg(forceNew: false)
+            guard let sid = ensureStreamingMsg(forceNew: false) else { return }
             let partId = "f\(code)"
             if messages.first(where: { $0.id == sid })?.parts.contains(where: { $0.id == partId }) == true { return }
             setMsg(sid) { m in
@@ -438,8 +443,12 @@ final class MessagesController {
         ISO8601DateFormatter().string(from: Date())
     }
 
-    private func ensureStreamingMsg(forceNew: Bool) -> String {
+    /// Returns the streaming bubble id, or nil when the target is a PERSISTED
+    /// (non-local) step — a reconnect replay of a finished step; callers must
+    /// skip the mutation.
+    private func ensureStreamingMsg(forceNew: Bool) -> String? {
         if let id = streamingId, let existing = messages.first(where: { $0.id == id }) {
+            if !existing.isLocal { return nil } // persisted step: replay duplicate
             if !forceNew || existing.parts.isEmpty { return id }
         }
         let id = "m\(Int(Date().timeIntervalSince1970 * 1000))"
@@ -454,10 +463,13 @@ final class MessagesController {
 
     /// Open (or reuse) the server-authored streaming assistant bubble for the
     /// id announced by `message-added{streaming:true}`. No id is minted here.
-    private func ensureStreamingMsgAt(_ id: String, _ prevId: String) {
-        if messages.contains(where: { $0.id == id }) {
+    @discardableResult
+    private func ensureStreamingMsgAt(_ id: String, _ prevId: String) -> Bool {
+        if let existing = messages.first(where: { $0.id == id }) {
+            // A persisted row: this is a replay of a finished step.
+            if !existing.isLocal { return false }
             streamingId = id
-            return
+            return true
         }
         messages.append(
             ChatMessage(id: id, role: "assistant", status: "streaming", parts: [],
@@ -465,6 +477,7 @@ final class MessagesController {
         )
         nextSeq += 1
         revision += 1
+        return true
     }
 
     /// Render a persisted row announced via `message-added` with the
@@ -482,6 +495,10 @@ final class MessagesController {
 
     private func setMsg(_ id: String, _ fn: (inout ChatMessage) -> Void) {
         guard let idx = messages.firstIndex(where: { $0.id == id }) else { return }
+        // A PERSISTED (non-local) row is a finished step: a streamed mutation
+        // for it is a reconnect-replay duplicate. Dropping it here guards every
+        // stream mutator (part ensure/append/tool) in one place.
+        if !messages[idx].isLocal { return }
         fn(&messages[idx])
         revision += 1
     }

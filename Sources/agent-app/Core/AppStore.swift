@@ -126,10 +126,26 @@ final class AppStore {
         }
     }
 
+    /// Assign the session list, ALWAYS ordered most-recent-first. The server
+    /// snapshot is ordered by `updated_at`, but a live upsert only advances a
+    /// row's `lastMessageAt` in place — without this re-sort the row's timestamp
+    /// changes while its position does not. Recency: lastMessageAt -> updatedAt
+    /// -> createdAt.
+    private func assignSessions(_ list: [Session]) {
+        sessions = list.sorted { recency($0) > recency($1) }
+    }
+
+    private func recency(_ s: Session) -> Double {
+        for v in [s.lastMessageAt, s.updatedAt, s.createdAt] where !v.isEmpty {
+            if let d = ISO8601DateFormatter().date(from: v) { return d.timeIntervalSince1970 }
+        }
+        return 0
+    }
+
     private func applySessionEvent(_ ev: SessionListEvent) {
         attempt = 0
         if ev.snapshot {
-            sessions = ev.upserts
+            assignSessions(ev.upserts)
             if firstSnapshot {
                 firstSnapshot = false
                 for s in ev.upserts where readSeqs[s.id] == nil {
@@ -150,7 +166,7 @@ final class AppStore {
                 if let i = next.firstIndex(where: { $0.id == s.id }) { next[i] = s } else { next.append(s) }
             }
             if !ev.removed.isEmpty { next.removeAll { ev.removed.contains($0.id) } }
-            sessions = next
+            assignSessions(next)
         }
         if let a = activeSession, (readSeqs[a.id] ?? -1) < a.messageSeq {
             readSeqs[a.id] = a.messageSeq
@@ -164,7 +180,7 @@ final class AppStore {
 
     func refreshSessions() async {
         do {
-            sessions = try await api.listSessions()
+            assignSessions(try await api.listSessions())
             sessionError = ""
         } catch {
             sessionError = error.localizedDescription
@@ -294,7 +310,7 @@ final class AppStore {
     func bumpSessionRevision() { sessionRevision += 1 }
 
     func applySession(_ updated: Session) {
-        sessions = sessions.map { $0.id == updated.id ? updated : $0 }
+        assignSessions(sessions.map { $0.id == updated.id ? updated : $0 })
         bumpSessionRevision()
     }
 
